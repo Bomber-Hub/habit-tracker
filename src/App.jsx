@@ -300,9 +300,9 @@ export default function App() {
                 <span className="nav-icon-s">🔔</span> Enable Alarms
               </button>
             ) : (
-              <div className="nav-item" style={{ color:"#34D399", cursor:"default" }}>
-                <span className="nav-icon-s">✅</span> Alarms Active
-              </div>
+              <button className="nav-item" onClick={()=>setNotifPermission("default")} style={{ color:"#34D399" }}>
+                <span className="nav-icon-s">✅</span> Alarms On · Turn Off
+              </button>
             )}
           </div>
         </div>
@@ -317,7 +317,7 @@ export default function App() {
             {notifPermission !== "granted" ? (
               <button onClick={enableAlarms} style={{ background:"rgba(255,107,107,0.15)", border:"1px solid rgba(255,107,107,0.25)", color:"#FF6B6B", borderRadius:10, padding:"8px 12px", fontFamily:"'DM Sans',sans-serif", fontSize:12, fontWeight:600, cursor:"pointer" }}>🔔 Alarms</button>
             ) : (
-              <div style={{ fontSize:12, color:"#34D399", fontWeight:600 }}>🔔 Active</div>
+              <button onClick={()=>setNotifPermission("default")} style={{ background:"rgba(52,211,153,0.15)", border:"1px solid rgba(52,211,153,0.3)", color:"#34D399", borderRadius:10, padding:"8px 12px", fontFamily:"'DM Sans',sans-serif", fontSize:12, fontWeight:600, cursor:"pointer" }}>🔔 On</button>
             )}
           </div>
 
