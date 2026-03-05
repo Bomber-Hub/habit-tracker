@@ -67,6 +67,26 @@ async function storageSet(key, val) {
   localStorage.setItem(key, val);
 }
 
+// Play alarm sound using Web Audio API
+function playAlarmSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const times = [0, 0.3, 0.6];
+    times.forEach(offset => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + offset);
+      osc.frequency.setValueAtTime(660, ctx.currentTime + offset + 0.1);
+      gain.gain.setValueAtTime(0.4, ctx.currentTime + offset);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + offset + 0.25);
+      osc.start(ctx.currentTime + offset);
+      osc.stop(ctx.currentTime + offset + 0.25);
+    });
+  } catch (_) {}
+}
+
 function scheduleAlarms(habits, completionsRef) {
   if (window._habitAlarmInterval) clearInterval(window._habitAlarmInterval);
   const fired = new Set();
@@ -78,6 +98,7 @@ function scheduleAlarms(habits, completionsRef) {
       const key = `${today}_${habit.id}`;
       if (habit.time === currentTime && !fired.has(key) && !completionsRef.current[today]?.[habit.id]) {
         fired.add(key);
+        playAlarmSound();
         if ("Notification" in window && Notification.permission === "granted") {
           new Notification(`Time for ${habit.name}${habit.sub ? ` (${habit.sub})` : ""}! ${habit.icon}`, {
             body: `It's ${formatTime(habit.time)} — stay on the grind 🔥`,
@@ -86,7 +107,14 @@ function scheduleAlarms(habits, completionsRef) {
         }
       }
     });
-  }, 30000);
+  }, 10000); // check every 10 seconds — much more reliable
+}
+
+function stopAlarms() {
+  if (window._habitAlarmInterval) {
+    clearInterval(window._habitAlarmInterval);
+    window._habitAlarmInterval = null;
+  }
 }
 
 export default function App() {
@@ -98,12 +126,37 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [justDone, setJustDone] = useState(null);
   const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "denied");
+  const [alarmsEnabled, setAlarmsEnabled] = useState(true);
+  const [darkMode, setDarkMode] = useState(true);
   const [form, setForm] = useState({ name:"", time:"08:00", icon:"🎯", color:"#FF6B6B", sub:"" });
   const [editId, setEditId] = useState(null);
   const completionsRef = useRef({});
 
   const habitsKey = `grind-habits-${userId}`;
   const compKey   = `grind-comp-${userId}`;
+
+  // Theme colors
+  const t = darkMode ? {
+    bg: "#0A0A12", sidebar: "#0D0C18", card: "#13121F",
+    border: "rgba(255,255,255,0.05)", borderStrong: "rgba(255,255,255,0.08)",
+    text: "#EFEFFF", textMuted: "rgba(255,255,255,0.3)", textFaint: "rgba(255,255,255,0.18)",
+    navActive: "#1A1928", input: "rgba(255,255,255,0.06)", inputBorder: "rgba(255,255,255,0.1)",
+    sectionLabel: "rgba(255,255,255,0.2)", progressBg: "rgba(255,255,255,0.07)",
+    cancelBtn: "rgba(255,255,255,0.06)", cancelText: "rgba(255,255,255,0.5)",
+    iconOptBg: "rgba(255,255,255,0.06)", checkBorder: "rgba(255,255,255,0.12)",
+    notifBanner: "rgba(255,107,107,0.09)", notifBannerBorder: "rgba(255,107,107,0.2)",
+    overlay: "rgba(0,0,0,0.75)", modalBg: "#13121F",
+  } : {
+    bg: "#F5F4FF", sidebar: "#FFFFFF", card: "#FFFFFF",
+    border: "rgba(0,0,0,0.07)", borderStrong: "rgba(0,0,0,0.1)",
+    text: "#1A1830", textMuted: "rgba(0,0,0,0.4)", textFaint: "rgba(0,0,0,0.2)",
+    navActive: "#F0EFFE", input: "rgba(0,0,0,0.04)", inputBorder: "rgba(0,0,0,0.1)",
+    sectionLabel: "rgba(0,0,0,0.25)", progressBg: "rgba(0,0,0,0.07)",
+    cancelBtn: "rgba(0,0,0,0.06)", cancelText: "rgba(0,0,0,0.4)",
+    iconOptBg: "rgba(0,0,0,0.05)", checkBorder: "rgba(0,0,0,0.15)",
+    notifBanner: "rgba(255,107,107,0.07)", notifBannerBorder: "rgba(255,107,107,0.2)",
+    overlay: "rgba(0,0,0,0.5)", modalBg: "#FFFFFF",
+  };
 
   useEffect(() => {
     (async () => {
@@ -112,21 +165,39 @@ export default function App() {
         if (h) setHabits(JSON.parse(h));
         const c = await storageGet(compKey);
         if (c) { const parsed = JSON.parse(c); setCompletions(parsed); completionsRef.current = parsed; }
+        const dm = await storageGet("grind-darkmode");
+        if (dm !== null) setDarkMode(dm === "true");
       } catch (_) {}
       setLoaded(true);
     })();
   }, []);
 
   useEffect(() => {
-    if (loaded) scheduleAlarms(habits, completionsRef);
-    return () => { if (window._habitAlarmInterval) clearInterval(window._habitAlarmInterval); };
-  }, [habits, loaded]);
+    if (loaded && alarmsEnabled) {
+      scheduleAlarms(habits, completionsRef);
+    } else {
+      stopAlarms();
+    }
+    return () => stopAlarms();
+  }, [habits, loaded, alarmsEnabled]);
 
   const enableAlarms = async () => {
     if (!("Notification" in window)) return;
     const result = await Notification.requestPermission();
     setNotifPermission(result);
-    if (result === "granted") scheduleAlarms(habits, completionsRef);
+    if (result === "granted") setAlarmsEnabled(true);
+  };
+
+  const toggleAlarms = () => {
+    const next = !alarmsEnabled;
+    setAlarmsEnabled(next);
+    if (!next) stopAlarms();
+  };
+
+  const toggleDarkMode = () => {
+    const next = !darkMode;
+    setDarkMode(next);
+    storageSet("grind-darkmode", String(next));
   };
 
   const saveHabits = async (data) => { await storageSet(habitsKey, JSON.stringify(data)); };
@@ -166,35 +237,43 @@ export default function App() {
   const greeting = now.getHours() < 12 ? "Morning" : now.getHours() < 17 ? "Afternoon" : "Evening";
   const { morning, afternoon, evening } = groupByPeriod(habits);
 
+  const AlarmButton = ({ mobile }) => {
+    if (notifPermission !== "granted") {
+      return (
+        <button className={mobile ? undefined : "nav-item"} onClick={enableAlarms}
+          style={mobile ? { background:"rgba(255,107,107,0.15)", border:"1px solid rgba(255,107,107,0.25)", color:"#FF6B6B", borderRadius:10, padding:"8px 12px", fontFamily:"'DM Sans',sans-serif", fontSize:12, fontWeight:600, cursor:"pointer" } : { color:"#FF6B6B" }}>
+          {mobile ? "🔔 Enable" : <><span className="nav-icon-s">🔔</span> Enable Alarms</>}
+        </button>
+      );
+    }
+    return (
+      <button className={mobile ? undefined : "nav-item"} onClick={toggleAlarms}
+        style={mobile ? { background: alarmsEnabled ? "rgba(52,211,153,0.15)" : "rgba(255,107,107,0.15)", border: alarmsEnabled ? "1px solid rgba(52,211,153,0.3)" : "1px solid rgba(255,107,107,0.25)", color: alarmsEnabled ? "#34D399" : "#FF6B6B", borderRadius:10, padding:"8px 12px", fontFamily:"'DM Sans',sans-serif", fontSize:12, fontWeight:600, cursor:"pointer" } : { color: alarmsEnabled ? "#34D399" : "#FF6B6B" }}>
+        {mobile ? (alarmsEnabled ? "🔔 On" : "🔕 Off") : <><span className="nav-icon-s">{alarmsEnabled ? "✅" : "🔕"}</span> {alarmsEnabled ? "Alarms On · Turn Off" : "Alarms Off · Turn On"}</>}
+      </button>
+    );
+  };
+
   if (!loaded) return (
-    <div style={{ minHeight:"100vh", background:"#0A0A12", display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div style={{ color:"rgba(255,255,255,0.3)", fontFamily:"sans-serif", fontSize:15 }}>Loading…</div>
+    <div style={{ minHeight:"100vh", background:t.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ color:t.textMuted, fontFamily:"sans-serif", fontSize:15 }}>Loading…</div>
     </div>
   );
 
   return (
-    <div style={{ minHeight:"100vh", background:"#0A0A12", fontFamily:"'DM Sans',sans-serif" }}>
+    <div style={{ minHeight:"100vh", background:t.bg, fontFamily:"'DM Sans',sans-serif", transition:"background 0.3s" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap');
         *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
-
         .layout { display:flex; min-height:100vh; }
-
-        .sidebar {
-          width:240px; min-height:100vh; background:#0D0C18;
-          border-right:1px solid rgba(255,255,255,0.06);
-          padding:40px 16px; display:flex; flex-direction:column; gap:4px;
-          position:fixed; left:0; top:0; bottom:0;
-        }
-        .sidebar-logo { font-family:'DM Serif Display',serif; font-size:24px; color:#EFEFFF; margin-bottom:28px; padding-bottom:20px; border-bottom:1px solid rgba(255,255,255,0.07); }
+        .sidebar { width:240px; min-height:100vh; background:${t.sidebar}; border-right:1px solid ${t.border}; padding:40px 16px; display:flex; flex-direction:column; gap:4px; position:fixed; left:0; top:0; bottom:0; transition:background 0.3s; }
+        .sidebar-logo { font-family:'DM Serif Display',serif; font-size:24px; color:${t.text}; margin-bottom:28px; padding-bottom:20px; border-bottom:1px solid ${t.border}; }
         .sidebar-logo span { color:#FF6B6B; }
-        .nav-item { display:flex; align-items:center; gap:10px; padding:11px 14px; border-radius:12px; cursor:pointer; border:none; background:transparent; color:rgba(255,255,255,0.4); font-family:'DM Sans',sans-serif; font-size:14px; font-weight:500; width:100%; text-align:left; transition:all 0.2s; }
-        .nav-item:hover { background:rgba(255,255,255,0.05); color:rgba(255,255,255,0.7); }
-        .nav-item.active { background:#1A1928; color:#EFEFFF; }
+        .nav-item { display:flex; align-items:center; gap:10px; padding:11px 14px; border-radius:12px; cursor:pointer; border:none; background:transparent; color:${t.textMuted}; font-family:'DM Sans',sans-serif; font-size:14px; font-weight:500; width:100%; text-align:left; transition:all 0.2s; }
+        .nav-item:hover { background:${darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)"}; color:${t.text}; }
+        .nav-item.active { background:${t.navActive}; color:${t.text}; }
         .nav-icon-s { font-size:18px; width:22px; text-align:center; }
-
         .main { margin-left:240px; padding:44px 44px 80px; flex:1; }
-
         @media (max-width:700px) {
           .sidebar { display:none !important; }
           .main { margin-left:0 !important; padding:0 0 90px !important; }
@@ -205,87 +284,77 @@ export default function App() {
           .inner-pad { padding:0 14px !important; }
           .stats-grid { grid-template-columns:repeat(2,1fr) !important; }
         }
-
         .mobile-header { display:none; justify-content:space-between; align-items:center; padding:48px 16px 4px; }
-        .bottom-nav { display:none; position:fixed; bottom:0; left:0; right:0; background:#0D0C18; border-top:1px solid rgba(255,255,255,0.07); padding:10px 0 24px; z-index:50; justify-content:center; gap:50px; }
+        .bottom-nav { display:none; position:fixed; bottom:0; left:0; right:0; background:${t.sidebar}; border-top:1px solid ${t.border}; padding:10px 0 24px; z-index:50; justify-content:center; gap:50px; transition:background 0.3s; }
         .bottom-nav-btn { display:flex; flex-direction:column; align-items:center; gap:3px; background:none; border:none; cursor:pointer; font-family:'DM Sans',sans-serif; }
         .bottom-nav-label { font-size:10px; font-weight:600; }
-
         .inner-pad { padding:0; }
         .page-header { margin-bottom:24px; margin-top:4px; }
-        .page-greeting { font-size:11px; color:rgba(255,255,255,0.3); letter-spacing:0.07em; text-transform:uppercase; margin-bottom:6px; }
-        .page-title { font-family:'DM Serif Display',serif; font-size:32px; color:#EFEFFF; line-height:1.1; }
-
-        .progress-wrap { background:#13121F; border:1px solid rgba(255,255,255,0.05); border-radius:16px; padding:16px 20px; margin-bottom:18px; }
+        .page-greeting { font-size:11px; color:${t.textMuted}; letter-spacing:0.07em; text-transform:uppercase; margin-bottom:6px; }
+        .page-title { font-family:'DM Serif Display',serif; font-size:32px; color:${t.text}; line-height:1.1; }
+        .progress-wrap { background:${t.card}; border:1px solid ${t.border}; border-radius:16px; padding:16px 20px; margin-bottom:18px; transition:background 0.3s; }
         .progress-top { display:flex; justify-content:space-between; margin-bottom:10px; }
-        .progress-label { font-size:13px; color:rgba(255,255,255,0.4); }
+        .progress-label { font-size:13px; color:${t.textMuted}; }
         .progress-pct { font-size:13px; font-weight:600; color:#FFD93D; }
-        .progress-bg { height:5px; background:rgba(255,255,255,0.07); border-radius:3px; overflow:hidden; }
+        .progress-bg { height:5px; background:${t.progressBg}; border-radius:3px; overflow:hidden; }
         .progress-fill { height:100%; border-radius:3px; background:linear-gradient(90deg,#FF6B6B,#FFD93D); transition:width 0.6s cubic-bezier(.4,0,.2,1); }
-
         .stats-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:8px; margin-bottom:18px; }
-        .stat-card { background:#13121F; border:1px solid rgba(255,255,255,0.05); border-radius:14px; padding:14px; text-align:center; }
+        .stat-card { background:${t.card}; border:1px solid ${t.border}; border-radius:14px; padding:14px; text-align:center; transition:background 0.3s; }
         .stat-num { font-size:26px; font-weight:700; font-family:'DM Serif Display',serif; }
-        .stat-label { font-size:10px; color:rgba(255,255,255,0.3); margin-top:2px; letter-spacing:0.05em; text-transform:uppercase; }
-
+        .stat-label { font-size:10px; color:${t.textMuted}; margin-top:2px; letter-spacing:0.05em; text-transform:uppercase; }
         .all-done { background:linear-gradient(135deg,rgba(255,107,107,0.12),rgba(255,217,61,0.12)); border:1px solid rgba(255,217,61,0.18); border-radius:16px; padding:16px; text-align:center; margin-bottom:18px; animation:fadeUp 0.4s ease; }
         @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
-
-        .section-label { font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:rgba(255,255,255,0.2); margin:20px 0 10px; }
-
+        .section-label { font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:${t.sectionLabel}; margin:20px 0 10px; }
         .cards-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:8px; }
-
-        .habit-card { background:#13121F; border-radius:18px; overflow:hidden; border:1px solid rgba(255,255,255,0.05); transition:transform 0.15s, box-shadow 0.15s; cursor:pointer; -webkit-user-select:none; user-select:none; }
-        .habit-card:hover { box-shadow:0 4px 20px rgba(0,0,0,0.3); transform:translateY(-1px); }
+        .habit-card { background:${t.card}; border-radius:18px; overflow:hidden; border:1px solid ${t.border}; transition:transform 0.15s, box-shadow 0.15s, background 0.3s; cursor:pointer; -webkit-user-select:none; user-select:none; }
+        .habit-card:hover { box-shadow:0 4px 20px ${darkMode ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.08)"}; transform:translateY(-1px); }
         .habit-card:active { transform:scale(0.98) !important; }
-        .habit-card.done { border-color:rgba(255,255,255,0.09); }
+        .habit-card.done { border-color:${t.borderStrong}; }
         .habit-inner { display:flex; align-items:center; gap:12px; padding:15px 16px; }
         .icon-wrap { width:44px; height:44px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:21px; flex-shrink:0; transition:transform 0.3s cubic-bezier(.34,1.56,.64,1); }
         .habit-card.done .icon-wrap { transform:scale(1.08); }
-        .habit-name-row { font-size:14px; font-weight:600; color:#EFEFFF; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+        .habit-name-row { font-size:14px; font-weight:600; color:${t.text}; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
         .habit-sub { font-size:10px; font-weight:600; padding:2px 7px; border-radius:20px; letter-spacing:0.04em; text-transform:uppercase; }
-        .habit-meta { font-size:11px; color:rgba(255,255,255,0.28); margin-top:3px; display:flex; gap:8px; align-items:center; }
+        .habit-meta { font-size:11px; color:${t.textMuted}; margin-top:3px; display:flex; gap:8px; align-items:center; }
         .streak-badge { font-size:11px; font-weight:600; padding:1px 7px; border-radius:20px; }
-        .check-wrap { width:27px; height:27px; border-radius:50%; flex-shrink:0; border:2px solid rgba(255,255,255,0.12); display:flex; align-items:center; justify-content:center; transition:all 0.25s cubic-bezier(.34,1.56,.64,1); }
+        .check-wrap { width:27px; height:27px; border-radius:50%; flex-shrink:0; border:2px solid ${t.checkBorder}; display:flex; align-items:center; justify-content:center; transition:all 0.25s cubic-bezier(.34,1.56,.64,1); }
         .habit-card.done .check-wrap { border-color:transparent; transform:scale(1.1); }
-        .checkmark { opacity:0; transform:scale(0); transition:all 0.2s cubic-bezier(.34,1.56,.64,1); font-size:13px; color:#0A0A12; font-weight:700; }
+        .checkmark { opacity:0; transform:scale(0); transition:all 0.2s cubic-bezier(.34,1.56,.64,1); font-size:13px; color:${darkMode ? "#0A0A12" : "#FFFFFF"}; font-weight:700; }
         .habit-card.done .checkmark { opacity:1; transform:scale(1); }
         .week-row { display:flex; gap:3px; padding:12px 16px 12px; }
         .done-pulse { animation:pulse 0.5s ease; }
         @keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.025)} 100%{transform:scale(1)} }
-
-        .manage-card { background:#13121F; border:1px solid rgba(255,255,255,0.05); border-radius:16px; padding:14px 16px; display:flex; align-items:center; gap:12px; margin-bottom:8px; }
-        .add-btn { background:none; border:1.5px dashed rgba(255,255,255,0.15); color:rgba(255,255,255,0.4); border-radius:16px; padding:14px; width:100%; text-align:center; cursor:pointer; font-family:'DM Sans',sans-serif; font-size:14px; transition:all 0.2s; margin-top:4px; }
-        .add-btn:hover { border-color:rgba(255,255,255,0.3); color:rgba(255,255,255,0.7); }
-
-        .notif-banner { background:rgba(255,107,107,0.09); border:1px solid rgba(255,107,107,0.2); border-radius:14px; padding:14px 16px; margin-bottom:16px; display:flex; align-items:center; gap:12px; }
-        .notif-btn { background:#FF6B6B; color:#0A0A12; border:none; border-radius:10px; padding:8px 14px; font-family:'DM Sans',sans-serif; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; }
-
-        .overlay { position:fixed; inset:0; background:rgba(0,0,0,0.75); display:flex; align-items:flex-end; justify-content:center; z-index:200; backdrop-filter:blur(6px); }
+        .manage-card { background:${t.card}; border:1px solid ${t.border}; border-radius:16px; padding:14px 16px; display:flex; align-items:center; gap:12px; margin-bottom:8px; transition:background 0.3s; }
+        .add-btn { background:none; border:1.5px dashed ${darkMode ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)"}; color:${t.textMuted}; border-radius:16px; padding:14px; width:100%; text-align:center; cursor:pointer; font-family:'DM Sans',sans-serif; font-size:14px; transition:all 0.2s; margin-top:4px; }
+        .add-btn:hover { border-color:${darkMode ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.3)"}; color:${t.text}; }
+        .notif-banner { background:${t.notifBanner}; border:1px solid ${t.notifBannerBorder}; border-radius:14px; padding:14px 16px; margin-bottom:16px; display:flex; align-items:center; gap:12px; }
+        .notif-btn { background:#FF6B6B; color:#FFFFFF; border:none; border-radius:10px; padding:8px 14px; font-family:'DM Sans',sans-serif; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; }
+        .overlay { position:fixed; inset:0; background:${t.overlay}; display:flex; align-items:flex-end; justify-content:center; z-index:200; backdrop-filter:blur(6px); }
         @media(min-width:701px){ .overlay { align-items:center; } }
-        .modal { background:#13121F; border-radius:24px 24px 0 0; padding:24px 22px 44px; width:100%; max-width:480px; border:1px solid rgba(255,255,255,0.08); max-height:92vh; overflow-y:auto; }
+        .modal { background:${t.modalBg}; border-radius:24px 24px 0 0; padding:24px 22px 44px; width:100%; max-width:480px; border:1px solid ${t.borderStrong}; max-height:92vh; overflow-y:auto; transition:background 0.3s; }
         @media(min-width:701px){ .modal { border-radius:20px; } }
-        .modal-title { font-family:'DM Serif Display',serif; font-size:22px; color:#EFEFFF; margin-bottom:20px; }
-        .field-label { font-size:10px; font-weight:600; color:rgba(255,255,255,0.35); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:8px; display:block; }
-        .field-input { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:12px; color:#EFEFFF; padding:12px 14px; font-size:15px; font-family:'DM Sans',sans-serif; width:100%; outline:none; transition:border-color 0.2s; margin-bottom:16px; }
-        .field-input:focus { border-color:rgba(255,255,255,0.25); }
-        .field-input::placeholder { color:rgba(255,255,255,0.2); }
+        .modal-title { font-family:'DM Serif Display',serif; font-size:22px; color:${t.text}; margin-bottom:20px; }
+        .field-label { font-size:10px; font-weight:600; color:${t.textMuted}; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:8px; display:block; }
+        .field-input { background:${t.input}; border:1px solid ${t.inputBorder}; border-radius:12px; color:${t.text}; padding:12px 14px; font-size:15px; font-family:'DM Sans',sans-serif; width:100%; outline:none; transition:border-color 0.2s; margin-bottom:16px; }
+        .field-input:focus { border-color:${darkMode ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.25)"}; }
+        .field-input::placeholder { color:${t.textFaint}; }
         .icon-grid { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px; }
-        .icon-opt { width:38px; height:38px; border-radius:10px; background:rgba(255,255,255,0.06); border:1.5px solid transparent; cursor:pointer; font-size:18px; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
-        .icon-opt.sel { border-color:rgba(255,255,255,0.4); background:rgba(255,255,255,0.12); }
+        .icon-opt { width:38px; height:38px; border-radius:10px; background:${t.iconOptBg}; border:1.5px solid transparent; cursor:pointer; font-size:18px; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
+        .icon-opt.sel { border-color:${darkMode ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.3)"}; background:${darkMode ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)"}; }
         .color-grid { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
         .color-dot { width:30px; height:30px; border-radius:50%; cursor:pointer; transition:transform 0.15s; }
         .color-dot:hover { transform:scale(1.15); }
-        .color-dot.sel { outline:3px solid white; outline-offset:2px; }
-        .primary-btn { background:white; color:#0A0A12; border:none; border-radius:12px; padding:14px; width:100%; font-family:'DM Sans',sans-serif; font-weight:600; font-size:15px; cursor:pointer; transition:opacity 0.15s; }
+        .color-dot.sel { outline:3px solid ${darkMode ? "white" : "#333"}; outline-offset:2px; }
+        .primary-btn { background:${darkMode ? "white" : "#1A1830"}; color:${darkMode ? "#0A0A12" : "#FFFFFF"}; border:none; border-radius:12px; padding:14px; width:100%; font-family:'DM Sans',sans-serif; font-weight:600; font-size:15px; cursor:pointer; transition:opacity 0.15s; }
         .primary-btn:hover { opacity:0.9; }
         .primary-btn:disabled { opacity:0.4; cursor:not-allowed; }
         .del-btn { background:rgba(255,80,80,0.12); color:#FF6B6B; border:1px solid rgba(255,80,80,0.25); border-radius:10px; padding:9px 14px; font-family:'DM Sans',sans-serif; font-size:13px; cursor:pointer; margin-top:10px; width:100%; }
-        .cancel-btn { background:rgba(255,255,255,0.06); color:rgba(255,255,255,0.5); border:none; border-radius:12px; padding:13px; width:100%; font-family:'DM Sans',sans-serif; font-size:14px; cursor:pointer; margin-top:8px; }
+        .cancel-btn { background:${t.cancelBtn}; color:${t.cancelText}; border:none; border-radius:12px; padding:13px; width:100%; font-family:'DM Sans',sans-serif; font-size:14px; cursor:pointer; margin-top:8px; }
+        .theme-toggle { background:none; border:none; cursor:pointer; font-size:20px; padding:4px; border-radius:8px; transition:transform 0.2s; }
+        .theme-toggle:hover { transform:scale(1.15); }
       `}</style>
 
       <div className="layout">
-        {/* Desktop Sidebar */}
         <div className="sidebar">
           <div className="sidebar-logo">Grind<span>.</span></div>
           <button className={`nav-item ${view==="today"?"active":""}`} onClick={()=>setView("today")}>
@@ -294,42 +363,33 @@ export default function App() {
           <button className={`nav-item ${view==="manage"?"active":""}`} onClick={()=>setView("manage")}>
             <span className="nav-icon-s">⚙️</span> Manage Habits
           </button>
-          <div style={{ marginTop:"auto", paddingTop:20, borderTop:"1px solid rgba(255,255,255,0.06)" }}>
-            {notifPermission !== "granted" ? (
-              <button className="nav-item" onClick={enableAlarms} style={{ color:"#FF6B6B" }}>
-                <span className="nav-icon-s">🔔</span> Enable Alarms
-              </button>
-            ) : (
-              <button className="nav-item" onClick={()=>setNotifPermission("default")} style={{ color:"#34D399" }}>
-                <span className="nav-icon-s">✅</span> Alarms On · Turn Off
-              </button>
-            )}
+          <div style={{ marginTop:"auto", paddingTop:20, borderTop:`1px solid ${t.border}` }}>
+            <button className="nav-item" onClick={toggleDarkMode} style={{ color: t.textMuted }}>
+              <span className="nav-icon-s">{darkMode ? "☀️" : "🌙"}</span>
+              {darkMode ? "Light Mode" : "Dark Mode"}
+            </button>
+            <AlarmButton mobile={false} />
           </div>
         </div>
 
-        {/* Main */}
         <div className="main">
-          {/* Mobile header */}
           <div className="mobile-header">
-            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:24, color:"#EFEFFF" }}>
+            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:24, color:t.text }}>
               Grind<span style={{color:"#FF6B6B"}}>.</span>
             </div>
-            {notifPermission !== "granted" ? (
-              <button onClick={enableAlarms} style={{ background:"rgba(255,107,107,0.15)", border:"1px solid rgba(255,107,107,0.25)", color:"#FF6B6B", borderRadius:10, padding:"8px 12px", fontFamily:"'DM Sans',sans-serif", fontSize:12, fontWeight:600, cursor:"pointer" }}>🔔 Alarms</button>
-            ) : (
-              <button onClick={()=>setNotifPermission("default")} style={{ background:"rgba(52,211,153,0.15)", border:"1px solid rgba(52,211,153,0.3)", color:"#34D399", borderRadius:10, padding:"8px 12px", fontFamily:"'DM Sans',sans-serif", fontSize:12, fontWeight:600, cursor:"pointer" }}>🔔 On</button>
-            )}
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <button className="theme-toggle" onClick={toggleDarkMode}>{darkMode ? "☀️" : "🌙"}</button>
+              <AlarmButton mobile={true} />
+            </div>
           </div>
 
           <div className="inner-pad">
-            {/* TODAY VIEW */}
             {view === "today" && (
               <>
                 <div className="page-header" style={{ marginTop:20 }}>
                   <div className="page-greeting">{greeting} · {now.toLocaleDateString("en-US",{weekday:"long",month:"short",day:"numeric"})}</div>
                   <div className="page-title">{allDone ? "You crushed it 🔥" : `${doneToday} of ${habits.length} done`}</div>
                 </div>
-
                 <div className="progress-wrap">
                   <div className="progress-top">
                     <span className="progress-label">Today's progress</span>
@@ -337,7 +397,6 @@ export default function App() {
                   </div>
                   <div className="progress-bg"><div className="progress-fill" style={{ width:`${pct}%` }} /></div>
                 </div>
-
                 {habits.some(h => getStreak(completions,h.id) > 0) && (
                   <div className="stats-grid">
                     {habits.filter(h => getStreak(completions,h.id) > 0).slice(0,4).map(h => (
@@ -348,57 +407,50 @@ export default function App() {
                     ))}
                   </div>
                 )}
-
                 {allDone && (
                   <div className="all-done">
                     <div style={{ fontSize:28, marginBottom:6 }}>🏆</div>
                     <div style={{ fontSize:15, fontWeight:700, color:"#FFD93D" }}>All habits complete!</div>
-                    <div style={{ fontSize:13, color:"rgba(255,255,255,0.35)", marginTop:4 }}>That's the grind. See you tomorrow.</div>
+                    <div style={{ fontSize:13, color:t.textMuted, marginTop:4 }}>That's the grind. See you tomorrow.</div>
                   </div>
                 )}
-
                 {habits.length === 0 && (
-                  <div style={{ textAlign:"center", padding:"60px 20px", color:"rgba(255,255,255,0.25)", fontSize:15 }}>
+                  <div style={{ textAlign:"center", padding:"60px 20px", color:t.textMuted, fontSize:15 }}>
                     No habits yet — go to Manage to add some!
                   </div>
                 )}
-
-                {morning.length > 0 && (<><div className="section-label">Morning</div><div className="cards-grid">{morning.map(h=><HabitCard key={h.id} habit={h} done={!!completions[today]?.[h.id]} streak={getStreak(completions,h.id)} week={getWeekData(completions,h.id)} onToggle={()=>toggle(h.id)} justDone={justDone===h.id}/>)}</div></>)}
-                {afternoon.length > 0 && (<><div className="section-label">Afternoon</div><div className="cards-grid">{afternoon.map(h=><HabitCard key={h.id} habit={h} done={!!completions[today]?.[h.id]} streak={getStreak(completions,h.id)} week={getWeekData(completions,h.id)} onToggle={()=>toggle(h.id)} justDone={justDone===h.id}/>)}</div></>)}
-                {evening.length > 0 && (<><div className="section-label">Evening</div><div className="cards-grid">{evening.map(h=><HabitCard key={h.id} habit={h} done={!!completions[today]?.[h.id]} streak={getStreak(completions,h.id)} week={getWeekData(completions,h.id)} onToggle={()=>toggle(h.id)} justDone={justDone===h.id}/>)}</div></>)}
+                {morning.length > 0 && (<><div className="section-label">Morning</div><div className="cards-grid">{morning.map(h=><HabitCard key={h.id} habit={h} done={!!completions[today]?.[h.id]} streak={getStreak(completions,h.id)} week={getWeekData(completions,h.id)} onToggle={()=>toggle(h.id)} justDone={justDone===h.id} t={t} darkMode={darkMode}/>)}</div></>)}
+                {afternoon.length > 0 && (<><div className="section-label">Afternoon</div><div className="cards-grid">{afternoon.map(h=><HabitCard key={h.id} habit={h} done={!!completions[today]?.[h.id]} streak={getStreak(completions,h.id)} week={getWeekData(completions,h.id)} onToggle={()=>toggle(h.id)} justDone={justDone===h.id} t={t} darkMode={darkMode}/>)}</div></>)}
+                {evening.length > 0 && (<><div className="section-label">Evening</div><div className="cards-grid">{evening.map(h=><HabitCard key={h.id} habit={h} done={!!completions[today]?.[h.id]} streak={getStreak(completions,h.id)} week={getWeekData(completions,h.id)} onToggle={()=>toggle(h.id)} justDone={justDone===h.id} t={t} darkMode={darkMode}/>)}</div></>)}
               </>
             )}
 
-            {/* MANAGE VIEW */}
             {view === "manage" && (
               <>
                 <div className="page-header" style={{ marginTop:20 }}>
                   <div className="page-greeting">Customise</div>
                   <div className="page-title">My Habits</div>
                 </div>
-
                 {notifPermission !== "granted" && (
                   <div className="notif-banner">
                     <div style={{ flex:1 }}>
-                      <div style={{ fontSize:13, fontWeight:600, color:"#EFEFFF", marginBottom:2 }}>Enable Alarms</div>
-                      <div style={{ fontSize:12, color:"rgba(255,255,255,0.4)" }}>Get notified at each habit's set time</div>
+                      <div style={{ fontSize:13, fontWeight:600, color:t.text, marginBottom:2 }}>Enable Alarms</div>
+                      <div style={{ fontSize:12, color:t.textMuted }}>Get notified at each habit's set time</div>
                     </div>
                     <button className="notif-btn" onClick={enableAlarms}>Enable</button>
                   </div>
                 )}
-
                 {habits.map(h => (
                   <div key={h.id} className="manage-card">
                     <div style={{ width:42, height:42, borderRadius:12, background:h.color+"22", display:"flex", alignItems:"center", justifyContent:"center", fontSize:21, flexShrink:0 }}>{h.icon}</div>
                     <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:14, fontWeight:600, color:"#EFEFFF" }}>{h.name}{h.sub ? ` · ${h.sub}` : ""}</div>
-                      <div style={{ fontSize:12, color:"rgba(255,255,255,0.3)", marginTop:2 }}>{formatTime(h.time)}</div>
+                      <div style={{ fontSize:14, fontWeight:600, color:t.text }}>{h.name}{h.sub ? ` · ${h.sub}` : ""}</div>
+                      <div style={{ fontSize:12, color:t.textMuted, marginTop:2 }}>{formatTime(h.time)}</div>
                     </div>
-                    <button style={{ background:"none", border:"none", cursor:"pointer", fontSize:18, color:"rgba(255,255,255,0.3)", padding:"4px 8px" }} onClick={()=>startEdit(h)}>✏️</button>
+                    <button style={{ background:"none", border:"none", cursor:"pointer", fontSize:18, color:t.textMuted, padding:"4px 8px" }} onClick={()=>startEdit(h)}>✏️</button>
                     <button style={{ background:"none", border:"none", cursor:"pointer", fontSize:18, color:"rgba(255,80,80,0.4)", padding:"4px 8px" }} onClick={()=>deleteHabit(h.id)}>🗑️</button>
                   </div>
                 ))}
-
                 <button className="add-btn" onClick={()=>{ setShowAdd(true); setEditId(null); setForm({ name:"", time:"08:00", icon:"🎯", color:"#FF6B6B", sub:"" }); }}>
                   + Add new habit
                 </button>
@@ -408,30 +460,28 @@ export default function App() {
         </div>
       </div>
 
-      {/* Mobile bottom nav */}
       <div className="bottom-nav">
         <button className="bottom-nav-btn" onClick={()=>setView("today")}>
           <span style={{ fontSize:22 }}>☀️</span>
-          <span className="bottom-nav-label" style={{ color: view==="today" ? "#FFD93D" : "rgba(255,255,255,0.3)" }}>Today</span>
+          <span className="bottom-nav-label" style={{ color: view==="today" ? "#FFD93D" : t.textMuted }}>Today</span>
         </button>
         <button className="bottom-nav-btn" onClick={()=>setView("manage")}>
           <span style={{ fontSize:22 }}>⚙️</span>
-          <span className="bottom-nav-label" style={{ color: view==="manage" ? "#FFD93D" : "rgba(255,255,255,0.3)" }}>Manage</span>
+          <span className="bottom-nav-label" style={{ color: view==="manage" ? "#FFD93D" : t.textMuted }}>Manage</span>
         </button>
       </div>
 
-      {/* Modal */}
       {showAdd && (
         <div className="overlay" onClick={()=>setShowAdd(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
-            <div style={{ width:36, height:4, background:"rgba(255,255,255,0.15)", borderRadius:2, margin:"0 auto 20px" }} />
+            <div style={{ width:36, height:4, background:t.border, borderRadius:2, margin:"0 auto 20px" }} />
             <div className="modal-title">{editId ? "Edit Habit" : "New Habit"}</div>
             <label className="field-label">Habit Name</label>
             <input className="field-input" placeholder="e.g. Morning Run" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
             <label className="field-label">Label (optional — e.g. Morning, Night)</label>
             <input className="field-input" placeholder="e.g. Morning" value={form.sub} onChange={e=>setForm(f=>({...f,sub:e.target.value}))} />
             <label className="field-label">Alarm Time</label>
-            <input className="field-input" type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))} style={{ colorScheme:"dark" }} />
+            <input className="field-input" type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))} style={{ colorScheme: darkMode ? "dark" : "light" }} />
             <label className="field-label">Icon</label>
             <div className="icon-grid">{ICONS.map(ic=><div key={ic} className={`icon-opt ${form.icon===ic?"sel":""}`} onClick={()=>setForm(f=>({...f,icon:ic}))}>{ic}</div>)}</div>
             <label className="field-label">Color</label>
@@ -446,7 +496,7 @@ export default function App() {
   );
 }
 
-function HabitCard({ habit, done, streak, week, onToggle, justDone }) {
+function HabitCard({ habit, done, streak, week, onToggle, justDone, t, darkMode }) {
   return (
     <div className={`habit-card ${done?"done":""} ${justDone?"done-pulse":""}`} onClick={onToggle}>
       <div className="habit-inner">
@@ -468,8 +518,8 @@ function HabitCard({ habit, done, streak, week, onToggle, justDone }) {
       <div className="week-row">
         {week.map((day, i) => (
           <div key={i} style={{ flex:1, position:"relative", paddingTop:14 }}>
-            <div style={{ position:"absolute", top:0, left:"50%", transform:"translateX(-50%)", fontSize:9, fontWeight:600, color: day.isToday ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.18)" }}>{DAY_LABELS[i]}</div>
-            <div style={{ height:3, borderRadius:2, background: day.done ? habit.color : day.isToday ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)", transition:"background 0.3s" }} />
+            <div style={{ position:"absolute", top:0, left:"50%", transform:"translateX(-50%)", fontSize:9, fontWeight:600, color: day.isToday ? (darkMode ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.4)") : (darkMode ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.2)") }}>{DAY_LABELS[i]}</div>
+            <div style={{ height:3, borderRadius:2, background: day.done ? habit.color : day.isToday ? (darkMode ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)") : (darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"), transition:"background 0.3s" }} />
           </div>
         ))}
       </div>
