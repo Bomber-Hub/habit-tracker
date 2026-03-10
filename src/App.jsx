@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Analytics } from "@vercel/analytics/react";
 
 const DEFAULT_HABITS = [
   { id: "bible-am", name: "Bible Study", sub: "Morning", time: "06:00", icon: "📖", color: "#FFD93D" },
@@ -492,6 +493,7 @@ export default function App() {
           </div>
         </div>
       )}
+      <Analytics />
     </div>
   );
 }
